@@ -5,30 +5,42 @@ const asset = require('../asset/main');
 const get = require('../request/get');
 const qs = require('querystring');
 const https = require('https');
+const http = require('http');
 
 function processVoice(voiceName, text) {
 	return new Promise((res, rej) => {
 		const voice = voices[voiceName];
 		switch (voice.source) {
 			case 'polly': {
-				var buffers = [];
-				var req = https.request({
-					hostname: 'pollyvoices.com',
-					port: '443',
-					path: '/api/sound/add',
-					method: 'POST',
+				var q = qs.encode({
+					texttype: "text",
+					text: text,
+					fallbackLanguage: "0",
+					voice: voice.arg,
+					rate: "0",
+					whisper: "false",
+					soft: "false",
+					wordbreakms: "0",
+					volume: "0",
+					marksid: "ca6108ea-0a10-476d-9c87-b32508002c80",
+					d: "true",
+					format: "mp3",
+				});
+				https.get({
+					host: 'talkify.net',
+					path: `/api/internal/speech?${q}`,
+					method: 'GET',
 					headers: {
-						'Content-Type': 'application/x-www-form-urlencoded',
+						Referer: 'https://talkify.net/text-to-speech',
+						Origin: 'https://talkify.net',
+						'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/75.0.3770.100 Safari/537.36',
 					},
 				}, r => {
-					r.on('data', b => buffers.push(b));
-					r.on('end', () => {
-						var json = JSON.parse(Buffer.concat(buffers));
-						get(`https://pollyvoices.com${json.file}`).then(res);
-					});
+					var buffers = [];
+					r.on('data', d => buffers.push(d));
+					r.on('end', () => res(Buffer.concat(buffers)));
+					r.on('error', rej);
 				});
-				req.write(qs.encode({ text: text, voice: voice.arg }));
-				req.end();
 				break;
 			}
 			case 'cepstral':
@@ -115,12 +127,7 @@ function processVoice(voiceName, text) {
 				});
 				console.log(https.get({
 					host: 'text-to-speech-demo.ng.bluemix.net',
-					path: `/api/v1/synthesize?${q}`,
-					headers: {
-						Referer: 'https://www.vocalware.com/index/demo',
-						Origin: 'https://www.vocalware.com',
-						'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/75.0.3770.100 Safari/537.36',
-					},
+					path: `/api/v3/synthesize?${q}`,
 				}, r => {
 					var buffers = [];
 					r.on('data', d => buffers.push(d));
@@ -129,6 +136,62 @@ function processVoice(voiceName, text) {
 				}));
 				break;
 			}
+			case 'acapela': {
+				var q = qs.encode({
+					cl_login: "VAAS_MKT",
+					req_snd_type: "",
+					req_voice: voice.arg,
+					cl_app: "seriousbusiness",
+					req_text: text,
+					cl_pwd: "M5Awq9xu",
+				});
+				console.log(http.get({
+					host: 'vaassl3.acapela-group.com',
+					path: `/Services/AcapelaTV/Synthesizer?${q}`,
+					method: 'GET',
+				}, r => {
+					var buffers = [];
+					r.on('data', d => buffers.push(d));
+					r.on('end', () => {
+							const html = Buffer.concat(buffers);
+							const beg = html.indexOf('&snd_url=') + 9;
+							const end = html.indexOf('&', beg);
+                            const loc = `https${html.subarray(beg+4, end).toString()}`;
+                            get(loc).then(res).catch(rej);
+						})
+					r.on('error', rej);
+				}));
+				break;
+			}
+            case 'readloud': {
+                const req = https.request({
+                    host: 'readloud.net',
+                    path: voice.arg,
+                    method: 'POST',
+                    port: '443',
+        headers: {
+            'Content-Type': 'application/x-www-form-urlencoded',
+        },
+                }, r => {
+                    var buffers = [];
+                    r.on('data', d => buffers.push(d));
+                    r.on('end', () => {
+                        const html = Buffer.concat(buffers);
+                        const beg = html.indexOf('/tmp/');
+                        const end = html.indexOf('.mp3', beg) + 4;
+                        const sub = html.subarray(beg, end).toString();
+                        const loc = `https://readloud.net${sub}`;
+                        get(loc).then(res).catch(rej);
+                    });
+                    r.on('error', rej);
+                });
+                req.write(qs.encode({
+                    but1: text,
+                    but: 'Enviar',
+                }));
+                req.end();
+                break;
+            }
 		}
 	});
 }
@@ -141,7 +204,7 @@ module.exports = function (req, res, url) {
 				if (e || !duration) return res.end(1 + process.env.FAILURE_XML);
 
 				const title = `[${voices[data.voice].desc}] ${data.text}`;
-				const id = asset.save(buffer, data.presaveId, '-tts.mp3');
+				const id = asset.saveLocal(buffer, data.presaveId, '-tts.mp3');
 				res.end(`0<response><asset><id>${id}</id><enc_asset_id>${id}</enc_asset_id><type>sound</type><subtype>tts</subtype><title>${title}</title><published>0</published><tags></tags><duration>${1e3 * duration}</duration><downloadtype>progressive</downloadtype><file>${id}</file></asset></response>`)
 			});
 		});
